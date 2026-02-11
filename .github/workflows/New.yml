@@ -14,7 +14,7 @@ on:
       FIRMWARE_URL:
         description: 'Stock ROM Link'
         required: true
-        default: ''
+        default: 'https://mirrors.lolinet.com/firmware/lenomola/2024/tank/official/TELEU/XT2407-1_TANK_TELEU_15_V1UWS35H.63-14-6-4-2-4_subsidy-DEFAULT_regulatory-DEFAULT_cid50_CFC.xml.zip'
       GENERATE_VENDOR:
         description: 'Create Vendor Tree'
         required: true
@@ -57,7 +57,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y python3-pip lz4 axel p7zip-full
-          # Install uv to fix the 'uvx command not found' error
           pip install uv
           echo "$HOME/.local/bin" >> $GITHUB_PATH
           sudo chmod -R 755 *
@@ -74,9 +73,7 @@ jobs:
       - name: Create Dump
         run: |
           cd workdir/DumprX
-          # We run without sudo to avoid permission issues with the 'env' file
           bash dumper.sh "${{ env.FUR }}"
-          # Ensure the runner owns the output
           sudo chown -R $USER:$USER out
           chmod -R 755 out
         working-directory: ${{ github.workspace }}
@@ -84,30 +81,38 @@ jobs:
       - name: Upload ROM Dump
         run: |
           . scripts/common_functions.sh
-          # Move into the dumper directory to ensure dump_props finds the output
-          cd workdir/DumprX
-          dump_props_to_env_file "$PWD/out"
+          BASE_DIR="${{ github.workspace }}"
+          DUMP_DIR="$BASE_DIR/workdir/DumprX"
+          DUMP_OUT_DIR="$DUMP_DIR/out"
+
+          cd "$DUMP_DIR"
+          dump_props_to_env_file "$DUMP_OUT_DIR"
           
-          # Check if env exists before sourcing
           if [ -f "env" ]; then
-            mv env ${{ github.workspace }}/env
+            mv env "$BASE_DIR/env"
           else
-            echo "::error::env file was not generated! Extraction might have failed."
+            echo "::error::env file not generated."
             exit 1
           fi
 
-          cd ${{ github.workspace }}
+          cd "$BASE_DIR"
           . env
           
-          cd workdir/DumprX/out
+          if [ -d "$DUMP_OUT_DIR" ]; then
+            cd "$DUMP_OUT_DIR"
+          else
+            echo "::error::Directory $DUMP_OUT_DIR not found!"
+            exit 1
+          fi
+
           lineageDir="lineage-device-tree"
           teamWinDir="twrp-device-tree"
           
-          if [ -d "$lineageDir" ]; then cp -r "$lineageDir" ${{ github.workspace }}; fi
-          if [ -d "$teamWinDir" ]; then cp -r "$teamWinDir" ${{ github.workspace }}; fi
+          [ -d "$lineageDir" ] && cp -r "$lineageDir" "$BASE_DIR/" || echo "Lineage tree not found."
+          [ -d "$teamWinDir" ] && cp -r "$teamWinDir" "$BASE_DIR/" || echo "TWRP tree not found."
           
           compress_files "$PWD"
-          bash ${{ github.workspace }}/scripts/upload_to_repo.sh "$PWD" dump
+          bash "$BASE_DIR/scripts/upload_to_repo.sh" "$PWD" dump
         working-directory: ${{ github.workspace }}
 
       - name: Create And Upload Vendor Tree
@@ -115,28 +120,33 @@ jobs:
         run: |
           . scripts/common_functions.sh
           [ -f env ] && . env
-          cd workdir
-          lineageDir="${{ github.workspace }}/lineage-device-tree"
-          mkdir -p android/device/$BRAND/$DEVICE
+          BASE_DIR="${{ github.workspace }}"
+          cd "$BASE_DIR/workdir"
+          
+          lineageDir="$BASE_DIR/lineage-device-tree"
+          TARGET_DIR="android/device/$BRAND/$DEVICE"
+          
           if [ -d "$lineageDir" ]; then 
-            cp -r $lineageDir/* android/device/$BRAND/$DEVICE
+            mkdir -p "$TARGET_DIR"
+            cp -r $lineageDir/* "$TARGET_DIR/"
           else 
-            echo "Cannot find Lineage device tree!"
+            echo "::error::Cannot find Lineage device tree!"
             exit 1
           fi
-          cd android/device/$BRAND/$DEVICE && chmod 755 *.sh
-          # Extract blobs from the dumped 'out' folder
-          bash extract-files.sh ${{ github.workspace }}/workdir/DumprX/out
-          cd ../../vendor/$BRAND/$DEVICE
+          
+          cd "$TARGET_DIR" && chmod 755 *.sh
+          bash extract-files.sh "$BASE_DIR/workdir/DumprX/out"
+          
+          cd "../../vendor/$BRAND/$DEVICE"
           chmod -R 755 *
-          bash ${{ github.workspace }}/scripts/upload_to_repo.sh "$PWD" vendor
+          bash "$BASE_DIR/scripts/upload_to_repo.sh" "$PWD" vendor
         working-directory: ${{ github.workspace }}
 
       - name: Upload LineageOS Device Tree
         if: env.LOT == 'true'
         run: |
           [ -f env ] && . env
-          bash ${{ github.workspace }}/scripts/upload_to_repo.sh "${{ github.workspace }}/lineage-device-tree" lineage lineage_device
+          bash "${{ github.workspace }}/scripts/upload_to_repo.sh" "${{ github.workspace }}/lineage-device-tree" lineage lineage_device
         working-directory: ${{ github.workspace }}
         continue-on-error: true
 
@@ -144,7 +154,11 @@ jobs:
         if: env.TWT == 'true'
         run: |
           [ -f env ] && . env
-          # Search for the recovery tree in the correct subfolder
-          find twrp-device-tree -name "$CODENAME" -type d -exec bash ${{ github.workspace }}/scripts/upload_to_repo.sh {} twrp recovery_device \;
+          RECOVERY_PATH=$(find twrp-device-tree -name "$CODENAME" -type d | head -n 1)
+          if [ -n "$RECOVERY_PATH" ]; then
+            bash "${{ github.workspace }}/scripts/upload_to_repo.sh" "$RECOVERY_PATH" twrp recovery_device
+          else
+            echo "TWRP tree not found."
+          fi
         working-directory: ${{ github.workspace }}
         continue-on-error: true
