@@ -1,47 +1,57 @@
-#!/usr/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-. scripts/common_functions.sh
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/common_functions.sh"
 
-THIS="$0"
-
-[ -z $1 ] && error "Working directory not speficed."
+[[ $# -lt 1 ]] && error "Working directory not specified"
 WORK_DIR="$1"
 
-cd "$WORK_DIR" || exit 1;
+[[ ! -d "$WORK_DIR" ]] && error "Directory not found: $WORK_DIR"
+cd "$WORK_DIR"
 
-echo "Updating repositories and upgrading all packages..."
-sudo apt -y update &>xerr || xerror "Cannot update packages!"
-sudo apt -y upgrade &>xerr || xerror "Cannot upgrade packages!"
+log "Updating packages..."
+sudo apt update -y &>xerr || xerror "Failed to update packages"
+sudo apt upgrade -y &>xerr || xerror "Failed to upgrade packages"
 
-echo "Installing required packages..."
-sudo apt -y install \
-  cpio \
-  aria2 \
-  git \
-  python3 \
-  neofetch \
-  tar \
-  gzip \
-    &>xerr || xerror "Cannot install required packages!"
+log "Installing required packages..."
+sudo apt install -y 
+cpio 
+aria2 
+git 
+python3 
+python3-pip 
+neofetch 
+tar 
+gzip 
+gh 
+&>xerr || xerror "Failed to install required packages"
 
-echo "Installing DumprX..."
-git clone https://github.com/DumprX/DumprX &>xerr \
-  || xerror "Cannot clone DumprX!"
-cd DumprX && chmod 755 *.sh
-bash setup.sh && cd ..
+log "Cloning DumprX..."
+if [[ ! -d DumprX ]]; then
+git clone https://github.com/DumprX/DumprX &>xerr || xerror "Failed to clone DumprX"
+fi
 
-echo "Installing twrpdtgen and aospdtgen"
-pip3 install aospdtgen &>xerr || xerror
-pip3 install twrpdtgen &>xerr || xerror
+pushd DumprX >/dev/null
+chmod +x *.sh
+bash setup.sh &>xerr || xerror "DumprX setup failed"
+popd >/dev/null
 
-echo "Installing extract utils"
-mkdir -p android/{tools,prebuilt,device}
+log "Installing Python tools..."
+pip3 install --upgrade pip &>xerr || xerror "Failed to upgrade pip"
+pip3 install aospdtgen twrpdtgen &>xerr || xerror "Failed to install dtgen tools"
 
-git clone --depth=1 \
-  https://github.com/LineageOS/android_tools_extract-utils \
-  -b lineage-22.2 ./android/tools/extract-utils &>xerr \
-  || xerror
-git clone --depth=1 \
- https://github.com/LineageOS/android_prebuilts_extract-tools \
-  -b lineage-22.2 ./android/prebuilts/extract-tools &>xerr \
-  || xerror
+log "Cloning extract utils..."
+mkdir -p android/{tools,prebuilts}
+
+git clone --depth=1 
+https://github.com/LineageOS/android_tools_extract-utils 
+-b lineage-22.2 android/tools/extract-utils &>xerr 
+|| xerror "Failed to clone extract-utils"
+
+git clone --depth=1 
+https://github.com/LineageOS/android_prebuilts_extract-tools 
+-b lineage-22.2 android/prebuilts/extract-tools &>xerr 
+|| xerror "Failed to clone extract-tools"
+
+log "Setup completed successfully."
