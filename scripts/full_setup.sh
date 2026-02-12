@@ -22,6 +22,7 @@ sudo apt -y install \
   neofetch \
   tar \
   gzip \
+  p7zip-full \
     &>xerr || xerror "Cannot install required packages!"
 
 echo "Installing DumprX..."

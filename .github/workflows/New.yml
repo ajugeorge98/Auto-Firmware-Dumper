@@ -36,6 +36,7 @@ jobs:
     name: Auto Firmware Dumper
     runs-on: ubuntu-latest
     env:
+      TERM: xterm
       # GITHUB_TOKEN removed from here to fix authentication conflict
       TWT: ${{ github.event.inputs.UPLOAD_TWRP_DT }}
       LOT: ${{ github.event.inputs.UPLOAD_LINEAGE_DT }}
