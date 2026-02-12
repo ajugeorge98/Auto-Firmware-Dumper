@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-===============================
-
-Logging Helpers
-
-===============================
+#===============================
+#
+#Logging Helpers
+#
+#===============================
 
 log() {
 command echo -e "[SCRIPT] $*"
@@ -29,11 +29,11 @@ warn() {
 command echo -e "[WARNING] $*"
 }
 
-===============================
-
-Compression Utilities
-
-===============================
+#===============================
+#
+#Compression Utilities
+#
+#===============================
 
 compress() {
 [[ $# -lt 1 ]] && error "compress(): Missing file argument"
@@ -63,11 +63,11 @@ local dir="$1"
 find "$dir" -type f -size +50M -exec bash -c 'compress "$0"' {} ;
 }
 
-===============================
-
-Property Extraction
-
-===============================
+#===============================
+#
+#Property Extraction
+#
+#===============================
 
 _get_prop() {
 local key="$1"
@@ -126,11 +126,11 @@ EOF
 log "Environment file written: env"
 }
 
-===============================
-
-GitHub Auth
-
-===============================
+#===============================
+#
+#GitHub Auth
+#
+#===============================
 
 git_auth() {
 [[ $# -lt 3 ]] && error "git_auth(): Requires name, email, token"
