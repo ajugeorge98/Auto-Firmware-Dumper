@@ -1,47 +1,42 @@
-#!/usr/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Import common functions for 'error' and 'Echo'
-# Assuming this script is in the same directory as common_functions.sh
-[ -f "$(dirname "$0")/common_functions.sh" ] && . "$(dirname "$0")/common_functions.sh"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/common_functions.sh"
 
-# Check for required arguments
-[ $# -lt 2 ] && { echo "Usage: $0 <directory> <type> [custom_name]"; exit 1; }
+[[ $# -lt 2 ]] && error "Usage: upload_to_repo.sh <directory> <repo_prefix> [custom_name]"
 
-# Set the repository name
-# If $3 is provided, use it. Otherwise, default to the type ($2).
-if [ -z "$3" ]; then
-    repo_name="${2}_${BRAND}_${DEVICE}"
-else
-    repo_name="${3}_${BRAND}_${DEVICE}"
-fi
+WORK_DIR="$1"
+PREFIX="$2"
+CUSTOM_NAME="${3:-$2}"
 
-# Sanitize repo name (replace spaces/dots with underscores)
-repo_name=$(echo "$repo_name" | tr ' .' '__')
+[[ ! -d "$WORK_DIR" ]] && error "Directory not found: $WORK_DIR"
 
-target_dir="$1"
-[ ! -d "$target_dir" ] && { echo "Error: Directory $target_dir not found"; exit 1; }
+Ensure required environment variables exist
 
-cd "$target_dir" || exit 1
+[[ -z "${BRAND:-}" ]] && error "BRAND not set (run dump_props first)"
+[[ -z "${DEVICE:-}" ]] && error "DEVICE not set (run dump_props first)"
+[[ -z "${FINGERPRINT:-}" ]] && error "FINGERPRINT not set (run dump_props first)"
 
-# Initialize Git and prepare the branch
-# We use a unique branch name based on the fingerprint to avoid conflicts
-branch_name="${2}-${FINGERPRINT}"
-git init -b "$branch_name"
+SAFE_FP=$(echo "$FINGERPRINT" | tr '/:' '')
+BRANCH_NAME="${PREFIX}-${SAFE_FP}"
+REPO_NAME="${CUSTOM_NAME}${BRAND}_${DEVICE}"
+
+cd "$WORK_DIR"
+
+log "Initializing git repository..."
+git init
+git checkout -b "$BRANCH_NAME"
 git add .
-git commit -s -m "Dump: $FINGERPRINT"
+git commit -s -m "$FINGERPRINT"
 
-# Create the repository on GitHub
-# --source=. tells gh to use the current directory as the project root
-# --push automatically pushes the local commits to the new remote
-Echo "Creating and pushing repository: $repo_name"
+command -v gh >/dev/null || error "GitHub CLI not installed"
 
-if gh repo create "$repo_name" --public --source=. --remote=origin --push; then
-    Echo "Successfully uploaded to: https://github.com/$UN/$repo_name"
-else
-    # Fallback if repo already exists: just try to push
-    warn "Repository might already exist or creation failed. Attempting force push..."
-    git remote add origin "https://github.com/$UN/$repo_name.git" 2>/dev/null
-    git push -u origin "$branch_name" --force
-fi
+log "Creating GitHub repository: $REPO_NAME"
+gh repo create "$REPO_NAME" 
+--public 
+--source=. 
+--remote=origin 
+--push
 
-cd - > /dev/null
+log "Repository uploaded successfully."
