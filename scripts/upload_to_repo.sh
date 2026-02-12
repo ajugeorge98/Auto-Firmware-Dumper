@@ -39,8 +39,8 @@ if ! gh repo create "$repo_name" --public > /dev/null 2>&1; then
 fi
 
 # Add the remote origin regardless, overwriting if it exists
-git remote add origin "https://github.com/$UN/$repo_name.git" 2>/dev/null || \
-git remote set-url origin "https://github.com/$UN/$repo_name.git"
+git remote add origin "https://$UN:$GITHUB_TOKEN@github.com/$UN/$repo_name.git" 2>/dev/null || \
+git remote set-url origin "https://$UN:$GITHUB_TOKEN@github.com/$UN/$repo_name.git"
 
 # Push the current branch to origin, setting upstream
 if git push -u origin "$branch_name" --force; then
