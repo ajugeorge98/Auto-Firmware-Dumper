@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       USER_NAME:
-        description: 'Name of your GitHub Account'
+        description: 'GitHub Username'
         required: true
         default: 'ajugeorge98'
       USER_EMAIL:
-        description: 'E-mail of your GitHub Account'
+        description: 'GitHub Email'
         required: true
         default: 'ajimsjames.gvilla@gmail.com'
       FIRMWARE_URL:
@@ -34,18 +34,16 @@ on:
 jobs:
   dump:
     name: Auto Firmware Dumper
-    if: github.event.repository.owner.id == github.event.sender.id
     runs-on: ubuntu-latest
     env:
-      GITHUB_TOKEN: ${{ secrets.GTOKEN }}
+      # GITHUB_TOKEN removed from here to fix authentication conflict
       TWT: ${{ github.event.inputs.UPLOAD_TWRP_DT }}
       LOT: ${{ github.event.inputs.UPLOAD_LINEAGE_DT }}
       GVT: ${{ github.event.inputs.GENERATE_VENDOR }}
       FUR: ${{ github.event.inputs.FIRMWARE_URL }}
       UN: ${{ github.event.inputs.USER_NAME }}
       UEM: ${{ github.event.inputs.USER_EMAIL }}
-    permissions:
-      contents: write
+    
     steps:
       - uses: actions/checkout@v4
       - uses: rokibhasansagar/slimhub_actions@main
@@ -59,15 +57,14 @@ jobs:
           sudo apt-get install -y python3-pip lz4 axel p7zip-full
           pip install uv
           echo "$HOME/.local/bin" >> $GITHUB_PATH
-          sudo chmod -R 755 *
           mkdir -p workdir
           bash scripts/full_setup.sh "$PWD/workdir"
-        working-directory: ${{ github.workspace }}
 
       - name: Authorize Git And GitHub CLI
         run: |
           . scripts/common_functions.sh
-          git_auth "${{ env.UN }}" "${{ env.UEM }}" "${{ env.GITHUB_TOKEN }}"
+          # Pass the GTOKEN secret directly to the function
+          git_auth "${{ env.UN }}" "${{ env.UEM }}" "${{ secrets.GTOKEN }}"
         working-directory: ${{ github.workspace }}
 
       - name: Create Dump
@@ -82,83 +79,16 @@ jobs:
         run: |
           . scripts/common_functions.sh
           BASE_DIR="${{ github.workspace }}"
-          DUMP_DIR="$BASE_DIR/workdir/DumprX"
-          DUMP_OUT_DIR="$DUMP_DIR/out"
-
-          cd "$DUMP_DIR"
-          dump_props_to_env_file "$DUMP_OUT_DIR"
+          cd "$BASE_DIR/workdir/DumprX"
+          dump_props_to_env_file "$PWD/out"
           
-          if [ -f "env" ]; then
-            mv env "$BASE_DIR/env"
-          else
-            echo "::error::env file not generated."
-            exit 1
-          fi
-
+          [ -f "env" ] && mv env "$BASE_DIR/env"
           cd "$BASE_DIR"
           . env
           
-          if [ -d "$DUMP_OUT_DIR" ]; then
-            cd "$DUMP_OUT_DIR"
-          else
-            echo "::error::Directory $DUMP_OUT_DIR not found!"
-            exit 1
-          fi
-
-          lineageDir="lineage-device-tree"
-          teamWinDir="twrp-device-tree"
-          
-          [ -d "$lineageDir" ] && cp -r "$lineageDir" "$BASE_DIR/" || echo "Lineage tree not found."
-          [ -d "$teamWinDir" ] && cp -r "$teamWinDir" "$BASE_DIR/" || echo "TWRP tree not found."
-          
+          cd "$BASE_DIR/workdir/DumprX/out"
           compress_files "$PWD"
+          # Ensure GITHUB_TOKEN is available for the upload script
+          export GITHUB_TOKEN="${{ secrets.GTOKEN }}"
           bash "$BASE_DIR/scripts/upload_to_repo.sh" "$PWD" dump
         working-directory: ${{ github.workspace }}
-
-      - name: Create And Upload Vendor Tree
-        if: env.GVT == 'true'
-        run: |
-          . scripts/common_functions.sh
-          [ -f env ] && . env
-          BASE_DIR="${{ github.workspace }}"
-          cd "$BASE_DIR/workdir"
-          
-          lineageDir="$BASE_DIR/lineage-device-tree"
-          TARGET_DIR="android/device/$BRAND/$DEVICE"
-          
-          if [ -d "$lineageDir" ]; then 
-            mkdir -p "$TARGET_DIR"
-            cp -r $lineageDir/* "$TARGET_DIR/"
-          else 
-            echo "::error::Cannot find Lineage device tree!"
-            exit 1
-          fi
-          
-          cd "$TARGET_DIR" && chmod 755 *.sh
-          bash extract-files.sh "$BASE_DIR/workdir/DumprX/out"
-          
-          cd "../../vendor/$BRAND/$DEVICE"
-          chmod -R 755 *
-          bash "$BASE_DIR/scripts/upload_to_repo.sh" "$PWD" vendor
-        working-directory: ${{ github.workspace }}
-
-      - name: Upload LineageOS Device Tree
-        if: env.LOT == 'true'
-        run: |
-          [ -f env ] && . env
-          bash "${{ github.workspace }}/scripts/upload_to_repo.sh" "${{ github.workspace }}/lineage-device-tree" lineage lineage_device
-        working-directory: ${{ github.workspace }}
-        continue-on-error: true
-
-      - name: Upload TWRP Device Tree
-        if: env.TWT == 'true'
-        run: |
-          [ -f env ] && . env
-          RECOVERY_PATH=$(find twrp-device-tree -name "$CODENAME" -type d | head -n 1)
-          if [ -n "$RECOVERY_PATH" ]; then
-            bash "${{ github.workspace }}/scripts/upload_to_repo.sh" "$RECOVERY_PATH" twrp recovery_device
-          else
-            echo "TWRP tree not found."
-          fi
-        working-directory: ${{ github.workspace }}
-        continue-on-error: true
