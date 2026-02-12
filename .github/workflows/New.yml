@@ -81,11 +81,11 @@ jobs:
           . scripts/common_functions.sh
           BASE_DIR="${{ github.workspace }}"
           cd "$BASE_DIR/workdir/DumprX"
-          dump_props_to_env_file "$PWD/out"
+          dump_props_to_env_file "$PWD/out" # Now writes directly to $BASE_DIR/env
           
-          [ -f "env" ] && mv env "$BASE_DIR/env"
-          cd "$BASE_DIR"
-          . env
+          cd "$BASE_DIR" # Move to BASE_DIR so .env can be sourced directly
+          . "$BASE_DIR/env" # Explicitly source the file from BASE_DIR
+
           
           cd "$BASE_DIR/workdir/DumprX/out"
           compress_files "$PWD"

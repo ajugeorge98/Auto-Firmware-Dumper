@@ -60,13 +60,15 @@ dump_props_to_env_file() {
   [ "$#" -lt 1 ] && error "Missing argument: working directory"
   dump_props "$1"
   
+  local env_file="${GITHUB_WORKSPACE:-.}/env"
+
   {
     echo "export BRAND=$BRAND"
     echo "export DEVICE=$DEVICE"
     echo "export FINGERPRINT=$FINGERPRINT"
     echo "export VERSION=$VERSION"
     echo "export CODENAME=$DEVICE"
-  } > "${GITHUB_WORKSPACE:-.}/env"
+  } > "$env_file"
 }
 
 git_auth() {
