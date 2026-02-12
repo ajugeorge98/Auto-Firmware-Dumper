@@ -4,91 +4,169 @@ on:
   workflow_dispatch:
     inputs:
       USER_NAME:
-        description: 'GitHub Username'
+        description: "GitHub Username"
         required: true
-        default: 'ajugeorge98'
+        default: "ajugeorge98"
       USER_EMAIL:
-        description: 'GitHub Email'
+        description: "GitHub Email"
         required: true
-        default: 'ajimsjames.gvilla@gmail.com'
+        default: "ajimsjames.gvilla@gmail.com"
       FIRMWARE_URL:
-        description: 'Stock ROM Link'
+        description: "Stock ROM Direct Download Link"
         required: true
-        default: 'https://mirrors.lolinet.com/firmware/lenomola/2024/tank/official/TELEU/XT2407-1_TANK_TELEU_15_V1UWS35H.63-14-6-4-2-4_subsidy-DEFAULT_regulatory-DEFAULT_cid50_CFC.xml.zip'
+        default: "https://mirrors.lolinet.com/firmware/lenomola/2024/tank/official/TELEU/XT2407-1_TANK_TELEU_15_V1UWS35H.63-14-6-4-2-4_subsidy-DEFAULT_regulatory"
       GENERATE_VENDOR:
-        description: 'Create Vendor Tree'
-        required: true
-        default: 'false'
+        description: "Generate Vendor Tree"
         type: boolean
+        required: true
+        default: false
       UPLOAD_LINEAGE_DT:
-        description: 'Upload LineageOS tree'
-        required: true
-        default: 'false'
+        description: "Upload LineageOS Device Tree"
         type: boolean
+        required: true
+        default: false
       UPLOAD_TWRP_DT:
-        description: 'Upload TWRP tree'
-        required: true
-        default: 'false'
+        description: "Upload TWRP Device Tree"
         type: boolean
+        required: true
+        default: false
 
 jobs:
   dump:
-    name: Auto Firmware Dumper
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
     env:
-      # GITHUB_TOKEN removed from here to fix authentication conflict
-      TWT: ${{ github.event.inputs.UPLOAD_TWRP_DT }}
-      LOT: ${{ github.event.inputs.UPLOAD_LINEAGE_DT }}
-      GVT: ${{ github.event.inputs.GENERATE_VENDOR }}
+      GITHUB_TOKEN: ${{ secrets.GTOKEN }}
       FUR: ${{ github.event.inputs.FIRMWARE_URL }}
       UN: ${{ github.event.inputs.USER_NAME }}
       UEM: ${{ github.event.inputs.USER_EMAIL }}
-    
+      GVT: ${{ github.event.inputs.GENERATE_VENDOR }}
+      LOT: ${{ github.event.inputs.UPLOAD_LINEAGE_DT }}
+      TWT: ${{ github.event.inputs.UPLOAD_TWRP_DT }}
+      TERM: xterm
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: rokibhasansagar/slimhub_actions@main
-      - uses: sersoft-gmbh/setup-gh-cli-action@v2
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup GitHub CLI
+        uses: sersoft-gmbh/setup-gh-cli-action@v2
         with:
           version: stable
 
-      - name: Setting Up Environment
+      - name: Validate Input
         run: |
-          sudo apt-get update
-          sudo apt-get install -y python3-pip lz4 axel p7zip-full
-          pip install uv
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          if [ -z "$FUR" ]; then
+            echo "Firmware URL is empty!"
+            exit 1
+          fi
+
+      - name: Setup Environment
+        run: |
           mkdir -p workdir
           bash scripts/full_setup.sh "$PWD/workdir"
-
-      - name: Authorize Git And GitHub CLI
-        run: |
-          . scripts/common_functions.sh
-          # Pass the GTOKEN secret directly to the function
-          git_auth "${{ env.UN }}" "${{ env.UEM }}" "${{ secrets.GTOKEN }}"
         working-directory: ${{ github.workspace }}
 
-      - name: Create Dump
+      - name: Authorize GitHub
+        run: |
+          source scripts/common_functions.sh
+          git_auth "$UN" "$UEM" "$GITHUB_TOKEN"
+        working-directory: ${{ github.workspace }}
+
+      - name: Run Dumper
         run: |
           cd workdir/DumprX
-          bash dumper.sh "${{ env.FUR }}"
+          sudo bash dumper.sh "$FUR"
           sudo chown -R $USER:$USER out
-          chmod -R 755 out
+          sudo chmod -R 755 out
+        working-directory: ${{ github.workspace }}
+
+      - name: Inspect Dump Output
+        run: |
+          cd workdir/DumprX/out
+
+          echo "===== TOP LEVEL ====="
+          ls -lah
+          echo
+
+          echo "===== DIRECTORY SUMMARY ====="
+          du -h --max-depth=1
+          echo
+
+          echo "===== PARTITION CHECK ====="
+          for dir in system vendor product system_ext vendor_dlkm; do
+            if [ -d "$dir" ]; then
+              echo "✔ $dir exists"
+            else
+              echo "✖ $dir missing"
+            fi
+          done
+
+          echo
+          echo "File Count:"
+          find . -type f | wc -l
+          echo "Directory Count:"
+          find . -type d | wc -l
+
+          # Stop if critical partitions missing
+          [ -d system ] || { echo "System missing. Aborting."; exit 1; }
+          [ -d vendor ] || { echo "Vendor missing. Aborting."; exit 1; }
+
         working-directory: ${{ github.workspace }}
 
       - name: Upload ROM Dump
         run: |
-          . scripts/common_functions.sh
-          BASE_DIR="${{ github.workspace }}"
-          cd "$BASE_DIR/workdir/DumprX"
-          dump_props_to_env_file "$PWD/out"
-          
-          [ -f "env" ] && mv env "$BASE_DIR/env"
-          cd "$BASE_DIR"
-          . env
-          
-          cd "$BASE_DIR/workdir/DumprX/out"
+          source scripts/common_functions.sh
+          dump_props_to_env_file "$PWD/workdir/DumprX/out"
+          source env
+
+          cd workdir/DumprX/out
           compress_files "$PWD"
-          # Ensure GITHUB_TOKEN is available for the upload script
-          export GITHUB_TOKEN="${{ secrets.GTOKEN }}"
-          bash "$BASE_DIR/scripts/upload_to_repo.sh" "$PWD" dump
+
+          bash ${{ github.workspace }}/scripts/upload_to_repo.sh "$PWD" dump
         working-directory: ${{ github.workspace }}
+
+      - name: Generate Vendor Tree
+        if: env.GVT == 'true'
+        run: |
+          source scripts/common_functions.sh
+          source env
+
+          cd workdir
+          mkdir -p android/device/$BRAND/$DEVICE
+
+          if [ -d lineage-device-tree ]; then
+            cp -r lineage-device-tree/* android/device/$BRAND/$DEVICE
+          else
+            echo "Lineage device tree not found!"
+            exit 1
+          fi
+
+          cd android/device/$BRAND/$DEVICE
+          chmod 755 *.sh 2>/dev/null || true
+
+          bash extract-files.sh ${{ github.workspace }}/workdir/DumprX/out
+
+          cd ../../vendor/$BRAND/$DEVICE
+          chmod -R 755 *
+
+          bash ${{ github.workspace }}/scripts/upload_to_repo.sh "$PWD" vendor
+        working-directory: ${{ github.workspace }}
+
+      - name: Upload LineageOS Device Tree
+        if: env.LOT == 'true'
+        run: |
+          source env
+          bash ${{ github.workspace }}/scripts/upload_to_repo.sh "$PWD/lineage-device-tree" lineage lineage_device
+        working-directory: ${{ github.workspace }}
+        continue-on-error: true
+
+      - name: Upload TWRP Device Tree
+        if: env.TWT == 'true'
+        run: |
+          source env
+          bash ${{ github.workspace }}/scripts/upload_to_repo.sh "$PWD/twrp-device-tree/$BRAND/$DEVICE" twrp recovery_device
+        working-directory: ${{ github.workspace }}
+        continue-on-error: true
