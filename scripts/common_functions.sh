@@ -5,31 +5,28 @@ Echo() { echo -e "[SCRIPT]: $*"; }
 error() { echo -e "ERROR: $*" >&2; exit 1; }
 warn() { echo -e "WARNING: $*" >&2; }
 
-# Improved compression logic with better error handling
+# Improved compression logic
 compress() {
   local file="$1"
   [[ ! -f "$file" ]] && return 1
   
-  # Get size in bytes
   local size=$(stat -c %s "$file")
   
-  # If file is larger than ~49MB (GitHub's soft limit is 50MB-100MB)
+  # Corrected comparison: use -gt instead of >
   if [ "$size" -gt 51380224 ]; then
-    Echo "Compressing $file (Size: $((size / 1024 / 1024))MB)..."
+    Echo "Compressing $file..."
     gzip -f "$file" || { warn "Failed to compress $file"; return 1; }
     Echo "Compressed: ${file}.gz"
   fi
 }
 export -f compress
 
-# Fix for the Exit Code 2 crash
 compress_files() {
-  # CORRECTED: Changed < to -lt
+  # Corrected comparison: use -lt instead of <
   [ "$#" -lt 1 ] && error "Missing argument: working directory"
   [ ! -d "$1" ] && error "Directory not found: $1"
 
   Echo "Checking for large files in $1..."
-  # Use bash -c to ensure the exported function is called correctly
   find "$1" -type f -size +50M -exec bash -c 'compress "$0"' {} \;
 }
 
@@ -38,28 +35,19 @@ dump_props() {
   local target_dir="$1"
   pushd "$target_dir" > /dev/null || error "Could not enter $target_dir"
 
-  # Find all build.prop files
   local prop_files=$(find . -name "build*.prop")
   
-  # 1. Extract Fingerprint (The most reliable unique ID)
   local fingerprint=$(grep -m1 -oP "(?<=^ro.build.fingerprint=).*" -h $prop_files | head -1)
   [[ -z "$fingerprint" ]] && fingerprint=$(grep -m1 -oP "(?<=^ro.vendor.build.fingerprint=).*" -h $prop_files | head -1)
 
-  # 2. Extract Brand
   local brand=$(grep -m1 -oP "(?<=^ro.product.brand=).*" -h $prop_files | head -1)
   [[ -z "$brand" ]] && brand=$(echo "$fingerprint" | cut -d'/' -f1)
-  [[ -z "$brand" ]] && brand="generic"
 
-  # 3. Extract Codename (Critical for Motorola 'tank')
   local codename=$(grep -m1 -oP "(?<=^ro.product.device=).*" -h $prop_files | head -1)
-  [[ -z "$codename" ]] && codename=$(grep -m1 -oP "(?<=^ro.build.product=).*" -h $prop_files | head -1)
   [[ -z "$codename" ]] && codename=$(echo "$fingerprint" | cut -d'/' -f3 | cut -d':' -f1)
 
-  # 4. Extract Android Version
   local release=$(grep -m1 -oP "(?<=^ro.build.version.release=).*" -h $prop_files | head -1)
-  [[ -z "$release" ]] && release="unknown"
 
-  # Export sanitized variables
   export BRAND=$(echo "$brand" | tr '[:upper:]' '[:lower:]' | xargs)
   export DEVICE=$(echo "$codename" | tr '[:upper:]' '[:lower:]' | xargs)
   export FINGERPRINT="$fingerprint"
@@ -72,7 +60,6 @@ dump_props_to_env_file() {
   [ "$#" -lt 1 ] && error "Missing argument: working directory"
   dump_props "$1"
   
-  # Create the environment file for GitHub Actions
   {
     echo "export BRAND=$BRAND"
     echo "export DEVICE=$DEVICE"
@@ -80,15 +67,21 @@ dump_props_to_env_file() {
     echo "export VERSION=$VERSION"
     echo "export CODENAME=$DEVICE"
   } > "${GITHUB_WORKSPACE:-.}/env"
-  
-  Echo "Environment saved to env file: $BRAND/$DEVICE (Android $VERSION)"
 }
 
 git_auth() {
-  [ "$#" -lt 3 ] && error "Missing git auth arguments (Name, Email, Token)"
+  [ "$#" -lt 3 ] && error "Missing git auth arguments"
+  
+  # Fix for Exit Code 1: Clear GITHUB_TOKEN before login
+  unset GITHUB_TOKEN
+  
   git config --global user.name "$1"
   git config --global user.email "$2"
-  # Use the token for gh cli
+  
+  # Perform login using the secret passed from the YAML
   echo "$3" | gh auth login --with-token
-  Echo "Git and GitHub CLI authorized as $1"
+  
+  # Set it for the current process
+  export GITHUB_TOKEN="$3"
+  Echo "Git and GitHub CLI authorized for $1"
 }
