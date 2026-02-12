@@ -1,93 +1,94 @@
-echo() { command echo -e "[SCRIPT]: $*"; }
-error() { echo "ERROR: $*"; exit 1; }
-xerror() { echo "ERROR: $*\n$(cat xerr)"; exit 1; }
-warn() { echo "WARNING: $*"; }
+#!/bin/bash
 
+# Utility for consistent logging
+Echo() { echo -e "[SCRIPT]: $*"; }
+error() { echo -e "ERROR: $*" >&2; exit 1; }
+warn() { echo -e "WARNING: $*" >&2; }
+
+# Improved compression logic with better error handling
 compress() {
-  [ $# -lt 1 ] && echo "Missing: file"
-  [ $(stat -c %s "$1") -gt 51380224 ] \
-    && gzip -f "$1" &>xerr || xerror
-  [ $(stat -c %s "$1".gz) -gt 51380224 ] \
-    && rm -f "$1".gz
+  local file="$1"
+  [[ ! -f "$file" ]] && return 1
+  
+  # Get size in bytes
+  local size=$(stat -c %s "$file")
+  
+  # If file is larger than ~49MB (GitHub's soft limit is 50MB-100MB)
+  if [ "$size" -gt 51380224 ]; then
+    Echo "Compressing $file (Size: $((size / 1024 / 1024))MB)..."
+    gzip -f "$file" || { warn "Failed to compress $file"; return 1; }
+    Echo "Compressed: ${file}.gz"
+  fi
+}
+export -f compress
 
-  echo "Compressed file: $1"
+# Fix for the Exit Code 2 crash
+compress_files() {
+  # CORRECTED: Changed < to -lt
+  [ "$#" -lt 1 ] && error "Missing argument: working directory"
+  [ ! -d "$1" ] && error "Directory not found: $1"
+
+  Echo "Checking for large files in $1..."
+  # Use bash -c to ensure the exported function is called correctly
+  find "$1" -type f -size +50M -exec bash -c 'compress "$0"' {} \;
 }
 
 dump_props() {
-  [ $# -lt 1 ] && error "Missing: working directory"
-  cd "$1"
+  [ "$#" -lt 1 ] && error "Missing argument: working directory"
+  local target_dir="$1"
+  pushd "$target_dir" > /dev/null || error "Could not enter $target_dir"
 
-  brand=$(grep -m1 -oP "(?<=^ro.product.brand=).*" -hs {system,system/system,vendor}/build*.prop | head -1)
-  [[ -z "${brand}" ]] && brand=$(grep -m1 -oP "(?<=^ro.product.brand.sub=).*" -hs system/system/euclid/my_product/build*.prop)
-  [[ -z "${brand}" ]] && brand=$(grep -m1 -oP "(?<=^ro.product.vendor.brand=).*" -hs vendor/build*.prop | head -1)
-  [[ -z "${brand}" ]] && brand=$(grep -m1 -oP "(?<=^ro.vendor.product.brand=).*" -hs vendor/build*.prop | head -1)
-  [[ -z "${brand}" ]] && brand=$(grep -m1 -oP "(?<=^ro.product.system.brand=).*" -hs {system,system/system}/build*.prop | head -1)
-  [[ -z "${brand}" || ${brand} == "OPPO" ]] && brand=$(grep -m1 -oP "(?<=^ro.product.system.brand=).*" -hs vendor/euclid/*/build.prop | head -1)
-  [[ -z "${brand}" ]] && brand=$(grep -m1 -oP "(?<=^ro.product.product.brand=).*" -hs vendor/euclid/product/build*.prop)
-  [[ -z "${brand}" ]] && brand=$(grep -m1 -oP "(?<=^ro.product.odm.brand=).*" -hs vendor/odm/etc/build*.prop)
-  [[ -z "${brand}" ]] && brand=$(grep -m1 -oP "(?<=^ro.product.brand=).*" -hs {oppo_product,my_product}/build*.prop | head -1)
-  [[ -z "${brand}" ]] && brand=$(grep -m1 -oP "(?<=^ro.product.brand=).*" -hs vendor/euclid/*/build.prop | head -1)
-  [[ -z "${brand}" ]] && brand=$(echo "$fingerprint" | cut -d'/' -f1)
-
-  codename=$(grep -m1 -oP "(?<=^ro.product.device=).*" -hs {vendor,system,system/system}/build*.prop | head -1)
-  [[ -z "${codename}" ]] && codename=$(grep -m1 -oP "(?<=^ro.vendor.product.device.oem=).*" -hs vendor/euclid/odm/build.prop | head -1)
-  [[ -z "${codename}" ]] && codename=$(grep -m1 -oP "(?<=^ro.product.vendor.device=).*" -hs vendor/build*.prop | head -1)
-  [[ -z "${codename}" ]] && codename=$(grep -m1 -oP "(?<=^ro.vendor.product.device=).*" -hs vendor/build*.prop | head -1)
-  [[ -z "${codename}" ]] && codename=$(grep -m1 -oP "(?<=^ro.product.system.device=).*" -hs {system,system/system}/build*.prop | head -1)
-  [[ -z "${codename}" ]] && codename=$(grep -m1 -oP "(?<=^ro.product.system.device=).*" -hs vendor/euclid/*/build.prop | head -1)
-  [[ -z "${codename}" ]] && codename=$(grep -m1 -oP "(?<=^ro.product.product.device=).*" -hs vendor/euclid/*/build.prop | head -1)
-  [[ -z "${codename}" ]] && codename=$(grep -m1 -oP "(?<=^ro.product.product.model=).*" -hs vendor/euclid/*/build.prop | head -1)
-  [[ -z "${codename}" ]] && codename=$(grep -m1 -oP "(?<=^ro.product.device=).*" -hs {oppo_product,my_product}/build*.prop | head -1)
-  [[ -z "${codename}" ]] && codename=$(grep -m1 -oP "(?<=^ro.product.product.device=).*" -hs oppo_product/build*.prop)
-  [[ -z "${codename}" ]] && codename=$(grep -m1 -oP "(?<=^ro.product.system.device=).*" -hs my_product/build*.prop)
-  [[ -z "${codename}" ]] && codename=$(grep -m1 -oP "(?<=^ro.product.vendor.device=).*" -hs my_product/build*.prop)
-  [[ -z "${codename}" ]] && codename=$(echo "$fingerprint" | cut -d'/' -f3 | cut -d':' -f1)
-  [[ -z "${codename}" ]] && codename=$(grep -m1 -oP "(?<=^ro.build.fota.version=).*" -hs {system,system/system}/build*.prop | cut -d'-' -f1 | head -1)
-  [[ -z "${codename}" ]] && codename=$(grep -oP "(?<=^ro.build.product=).*" -hs {vendor,system,system/system}/build*.prop | head -1)
+  # Find all build.prop files
+  local prop_files=$(find . -name "build*.prop")
   
+  # 1. Extract Fingerprint (The most reliable unique ID)
+  local fingerprint=$(grep -m1 -oP "(?<=^ro.build.fingerprint=).*" -h $prop_files | head -1)
+  [[ -z "$fingerprint" ]] && fingerprint=$(grep -m1 -oP "(?<=^ro.vendor.build.fingerprint=).*" -h $prop_files | head -1)
 
-  fingerprint=$(grep -m1 -oP "(?<=^ro.build.fingerprint=).*" -hs {system,system/system}/build*.prop)
-  [[ -z "${fingerprint}" ]] && fingerprint=$(grep -m1 -oP "(?<=^ro.vendor.build.fingerprint=).*" -hs vendor/build*.prop | head -1)
-  [[ -z "${fingerprint}" ]] && fingerprint=$(grep -m1 -oP "(?<=^ro.system.build.fingerprint=).*" -hs {system,system/system}/build*.prop)
-  [[ -z "${fingerprint}" ]] && fingerprint=$(grep -m1 -oP "(?<=^ro.product.build.fingerprint=).*" -hs product/build*.prop)
-  [[ -z "${fingerprint}" ]] && fingerprint=$(grep -m1 -oP "(?<=^ro.build.fingerprint=).*" -hs {oppo_product,my_product}/build*.prop)
-  [[ -z "${fingerprint}" ]] && fingerprint=$(grep -m1 -oP "(?<=^ro.system.build.fingerprint=).*" -hs my_product/build.prop)
-  [[ -z "${fingerprint}" ]] && fingerprint=$(grep -m1 -oP "(?<=^ro.vendor.build.fingerprint=).*" -hs my_product/build.prop)
-  [[ -z "${fingerprint}" ]] && fingerprint=$(grep -m1 -oP "(?<=^ro.bootimage.build.fingerprint=).*" -hs vendor/build.prop)
+  # 2. Extract Brand
+  local brand=$(grep -m1 -oP "(?<=^ro.product.brand=).*" -h $prop_files | head -1)
+  [[ -z "$brand" ]] && brand=$(echo "$fingerprint" | cut -d'/' -f1)
+  [[ -z "$brand" ]] && brand="generic"
 
-  release=$(grep -m1 -oP "(?<=^ro.build.version.release=).*" -hs {system,system/system,vendor}/build*.prop)
-  [[ -z "${release}" ]] && release=$(grep -m1 -oP "(?<=^ro.vendor.build.version.release=).*" -hs vendor/build*.prop)
-  [[ -z "${release}" ]] && release=$(grep -m1 -oP "(?<=^ro.system.build.version.release=).*" -hs {system,system/system}/build*.prop)
+  # 3. Extract Codename (Critical for Motorola 'tank')
+  local codename=$(grep -m1 -oP "(?<=^ro.product.device=).*" -h $prop_files | head -1)
+  [[ -z "$codename" ]] && codename=$(grep -m1 -oP "(?<=^ro.build.product=).*" -h $prop_files | head -1)
+  [[ -z "$codename" ]] && codename=$(echo "$fingerprint" | cut -d'/' -f3 | cut -d':' -f1)
 
-  export BRAND="$(tr 'A-Z' 'a-z' <<< $brand)"
-  export DEVICE="$(tr 'A-Z' 'a-z' <<< $codename)"
+  # 4. Extract Android Version
+  local release=$(grep -m1 -oP "(?<=^ro.build.version.release=).*" -h $prop_files | head -1)
+  [[ -z "$release" ]] && release="unknown"
+
+  # Export sanitized variables
+  export BRAND=$(echo "$brand" | tr '[:upper:]' '[:lower:]' | xargs)
+  export DEVICE=$(echo "$codename" | tr '[:upper:]' '[:lower:]' | xargs)
   export FINGERPRINT="$fingerprint"
   export VERSION="$release"
   
-  cd -
+  popd > /dev/null
 }
 
 dump_props_to_env_file() {
-  [ $# -lt 1 ] && error "Missing: working directory"
+  [ "$#" -lt 1 ] && error "Missing argument: working directory"
   dump_props "$1"
-  echo "export BRAND=$BRAND" > env
-  echo "export DEVICE=$DEVICE" >> env
-  echo "export FINGERPRINT=$FINGERPRINT" >> env
-  echo "export VERSION=$VERSION" >> env
-}
-
-compress_files() {
-  [ $# < 1 ] && error "Missing: working directory"
-  [ ! -d "$1" ] && error "Cannot find directory"
-
-  find "$1" -type f -size +50M -exec compress {} \;
+  
+  # Create the environment file for GitHub Actions
+  {
+    echo "export BRAND=$BRAND"
+    echo "export DEVICE=$DEVICE"
+    echo "export FINGERPRINT=$FINGERPRINT"
+    echo "export VERSION=$VERSION"
+    echo "export CODENAME=$DEVICE"
+  } > "${GITHUB_WORKSPACE:-.}/env"
+  
+  Echo "Environment saved to env file: $BRAND/$DEVICE (Android $VERSION)"
 }
 
 git_auth() {
-  [ $# -lt 3 ] && error "Missing argument"
-  unset GITHUB_TOKEN
+  [ "$#" -lt 3 ] && error "Missing git auth arguments (Name, Email, Token)"
   git config --global user.name "$1"
   git config --global user.email "$2"
-  gh auth login --with-token <<< "$3"
+  # Use the token for gh cli
+  echo "$3" | gh auth login --with-token
+  Echo "Git and GitHub CLI authorized as $1"
 }
-
