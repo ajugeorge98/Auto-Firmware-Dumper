@@ -4,6 +4,7 @@
 Echo() { echo -e "[SCRIPT]: $*"; }
 error() { echo -e "ERROR: $*" >&2; exit 1; }
 warn() { echo -e "WARNING: $*" >&2; }
+export -f Echo error warn
 
 # Improved compression logic
 compress() {
@@ -50,7 +51,7 @@ dump_props() {
 
   export BRAND=$(echo "$brand" | tr '[:upper:]' '[:lower:]' | xargs)
   export DEVICE=$(echo "$codename" | tr '[:upper:]' '[:lower:]' | xargs)
-  export FINGERPRINT="$fingerprint"
+  export FINGERPRINT=$(echo "$fingerprint" | sed 's/[/:]/_/g')
   export VERSION="$release"
   
   popd > /dev/null

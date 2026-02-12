@@ -27,21 +27,26 @@ cd "$target_dir" || exit 1
 # We use a unique branch name based on the fingerprint to avoid conflicts
 branch_name="${2}-${FINGERPRINT}"
 git init -b "$branch_name"
-git add .
-git commit -s -m "Dump: $FINGERPRINT"
+git add -f .
+git commit -s -m "Dump: $FINGERPRINT" || { Echo "No changes to commit for $repo_name, skipping push."; exit 0; } # Handle no changes
 
-# Create the repository on GitHub
-# --source=. tells gh to use the current directory as the project root
-# --push automatically pushes the local commits to the new remote
-Echo "Creating and pushing repository: $repo_name"
+# Create the repository on GitHub and push the current branch
+Echo "Attempting to create and push repository: $repo_name"
 
-if gh repo create "$repo_name" --public --source=. --remote=origin --push; then
+# Try to create the remote repo. If it fails, assume it already exists.
+if ! gh repo create "$repo_name" --public > /dev/null 2>&1; then
+    warn "Repository $repo_name might already exist or creation failed. Attempting to add remote and push."
+fi
+
+# Add the remote origin regardless, overwriting if it exists
+git remote add origin "https://github.com/$UN/$repo_name.git" 2>/dev/null || \
+git remote set-url origin "https://github.com/$UN/$repo_name.git"
+
+# Push the current branch to origin, setting upstream
+if git push -u origin "$branch_name" --force; then
     Echo "Successfully uploaded to: https://github.com/$UN/$repo_name"
 else
-    # Fallback if repo already exists: just try to push
-    warn "Repository might already exist or creation failed. Attempting force push..."
-    git remote add origin "https://github.com/$UN/$repo_name.git" 2>/dev/null
-    git push -u origin "$branch_name" --force
+    error "Failed to push to repository: $repo_name"
 fi
 
 cd - > /dev/null
