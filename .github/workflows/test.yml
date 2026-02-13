@@ -1,0 +1,113 @@
+name: TWRP Tree Generator (Full Auto)
+
+on:
+  workflow_dispatch:
+    inputs:
+      USER_NAME:
+        description: 'GitHub Username'
+        required: true
+        default: 'ajugeorge98'
+      USER_EMAIL:
+        description: 'GitHub Email'
+        required: true
+        default: 'ajimsjames.gvilla@gmail.com'
+      FIRMWARE_URL:
+        description: 'Direct Stock ROM Link'
+        required: true
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GTOKEN }}
+      UN: ${{ github.event.inputs.USER_NAME }}
+      UEM: ${{ github.event.inputs.USER_EMAIL }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pip lz4 axel p7zip-full python3-dev
+          pip install twrpdtgen
+          mkdir -p workdir/out
+
+      - name: Download & Extract Images
+        run: |
+          cd workdir
+          # Download firmware
+          axel -n 8 -a "${{ github.event.inputs.FIRMWARE_URL }}" -o firmware.zip
+          
+          # Extract images needed for tree and fstab
+          unzip firmware.zip "boot.img" "recovery.img" "vendor_boot.img" "vendor.img" "system.img" "dtbo.img" "dtb" -d out || true
+          
+          # Handle payload.bin (Modern Motorola/OnePlus)
+          if [ -f out/payload.bin ]; then
+            wget https://github.com/ssut/payload-dumper-go/releases/download/v1.2.2/payload-dumper-go_1.2.2_linux_amd64.tar.gz
+            tar -xf payload-dumper-go_1.2.2_linux_amd64.tar.gz
+            ./payload-dumper-go -p boot,vendor_boot,recovery,vendor,system,dtbo,dtb -o out out/payload.bin
+          fi
+
+      - name: Generate Tree & Extract Fstab
+        run: |
+          cd workdir/out
+          
+          # 1. Generate Base Tree
+          TARGET_IMG=$(ls recovery.img boot.img vendor_boot.img 2>/dev/null | head -n 1)
+          python3 -m twrpdtgen "$TARGET_IMG"
+          
+          TREE_PATH=$(find output -mindepth 2 -maxdepth 2 -type d | head -n 1)
+          CODENAME=$(basename "$TREE_PATH")
+          BRAND=$(basename $(dirname "$TREE_PATH"))
+          
+          # 2. Extract Fstab (Universal)
+          # Try to find fstab in vendor or system
+          mkdir -p mnt
+          for img in "vendor.img" "system.img"; do
+            if [ -f "$img" ]; then
+              # Attempt to mount or use 7z to extract fstab files
+              7z e "$img" "etc/fstab*" "etc/recovery.fstab" -o"fstab_out" -r || true
+            fi
+          done
+          
+          # Move found fstabs to the recovery tree
+          cp fstab_out/fstab.* "$TREE_PATH/recovery.fstab" 2>/dev/null || cp fstab_out/recovery.fstab "$TREE_PATH/recovery.fstab" 2>/dev/null || echo "No fstab found, manual config needed"
+
+          # 3. Kernel & Offsets
+          # Grab MagiskBoot for offsets
+          wget -q https://raw.githubusercontent.com/Drag0n-Y/magiskboot_binary/main/magiskboot
+          chmod +x magiskboot
+          ./magiskboot unpack "$TARGET_IMG"
+          
+          if [ -f header ]; then
+            PS=$(grep "pagesize" header | cut -d'=' -f2)
+            BS=$(grep "base" header | cut -d'=' -f2)
+            sed -i "/BOARD_BOOT_PAGESIZE/c\BOARD_BOOT_PAGESIZE := $PS" "$TREE_PATH/BoardConfig.mk"
+            echo "BOARD_KERNEL_BASE := $BS" >> "$TREE_PATH/BoardConfig.mk"
+          fi
+
+          # 4. Copy Prebuilts
+          mkdir -p "$TREE_PATH/prebuilt"
+          for k in "kernel" "kernel.gz" "Image" "Image.gz"; do
+            if [ -f "$k" ]; then cp "$k" "$TREE_PATH/prebuilt/kernel"; break; fi
+          done
+          [ -f "dtb" ] && cp "dtb" "$TREE_PATH/prebuilt/dtb"
+          [ -f "dtbo.img" ] && cp "dtbo.img" "$TREE_PATH/prebuilt/dtbo.img"
+
+          echo "TREE_PATH=$PWD/$TREE_PATH" >> $GITHUB_ENV
+          echo "REPO_NAME=android_device_${BRAND}_${CODENAME}-twrp" >> $GITHUB_ENV
+
+      - name: Push to GitHub
+        run: |
+          cd ${{ env.TREE_PATH }}
+          git init
+          git config user.name "${{ env.UN }}"
+          git config user.email "${{ env.UEM }}"
+          git add .
+          git commit -m "TWRP: Initial auto-generated tree for ${{ env.REPO_NAME }}"
+          
+          gh repo create "${{ env.UN }}/${{ env.REPO_NAME }}" --public --confirm || true
+          git remote add origin https://x-access-token:${{ secrets.GTOKEN }}@github.com/${{ env.UN }}/${{ env.REPO_NAME }}.git
+          git push -u origin master -f
