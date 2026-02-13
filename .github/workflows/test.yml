@@ -52,31 +52,49 @@ jobs:
 
       - name: Generate Tree & Extract Fstab
         run: |
-          cd workdir/out
-          
-          # 1. Generate Base Tree
-          TARGET_IMG=$(ls recovery.img boot.img vendor_boot.img 2>/dev/null | head -n 1)
+          # 1. Locate images robustly (Recursive search)
+          # This ensures that even if files are in out/extracted/boot.img, we find them.
+          IMG_DIR="$GITHUB_WORKSPACE/workdir/out"
+          BOOT_IMG=$(find "$IMG_DIR" -name "boot.img" | head -n 1)
+          RECOVERY_IMG=$(find "$IMG_DIR" -name "recovery.img" | head -n 1)
+          V_BOOT_IMG=$(find "$IMG_DIR" -name "vendor_boot.img" | head -n 1)
+
+          # Pick the best target: Recovery > Boot > Vendor_Boot
+          TARGET_IMG=""
+          if [ -f "$RECOVERY_IMG" ]; then TARGET_IMG="$RECOVERY_IMG";
+          elif [ -f "$BOOT_IMG" ]; then TARGET_IMG="$BOOT_IMG";
+          elif [ -f "$V_BOOT_IMG" ]; then TARGET_IMG="$V_BOOT_IMG"; fi
+
+          if [ -z "$TARGET_IMG" ]; then 
+            echo "❌ ERROR: No boot/recovery image found in $IMG_DIR"
+            ls -R "$IMG_DIR" # Debugging: Print everything found
+            exit 1 
+          fi
+
+          echo "✅ Found Target Image: $TARGET_IMG"
+
+          # 2. Run twrpdtgen using absolute path
+          cd "$IMG_DIR"
           python3 -m twrpdtgen "$TARGET_IMG"
-          
+
+          # 3. Identify generated path
           TREE_PATH=$(find output -mindepth 2 -maxdepth 2 -type d | head -n 1)
+          if [ -z "$TREE_PATH" ]; then echo "❌ Tree generation failed"; exit 1; fi
+          
           CODENAME=$(basename "$TREE_PATH")
           BRAND=$(basename $(dirname "$TREE_PATH"))
-          
-          # 2. Extract Fstab (Universal)
-          # Try to find fstab in vendor or system
-          mkdir -p mnt
-          for img in "vendor.img" "system.img"; do
-            if [ -f "$img" ]; then
-              # Attempt to mount or use 7z to extract fstab files
-              7z e "$img" "etc/fstab*" "etc/recovery.fstab" -o"fstab_out" -r || true
-            fi
+          echo "✅ Generated Tree for: $BRAND $CODENAME"
+
+          # 4. Extract Fstab
+          mkdir -p fstab_out
+          find . -name "vendor.img" -o -name "system.img" | while read img; do
+            7z e "$img" "etc/fstab*" "etc/recovery.fstab" -ofstab_out -r -y || true
           done
           
-          # Move found fstabs to the recovery tree
-          cp fstab_out/fstab.* "$TREE_PATH/recovery.fstab" 2>/dev/null || cp fstab_out/recovery.fstab "$TREE_PATH/recovery.fstab" 2>/dev/null || echo "No fstab found, manual config needed"
+          # Move fstabs
+          cp fstab_out/fstab.* "$TREE_PATH/recovery.fstab" 2>/dev/null || cp fstab_out/recovery.fstab "$TREE_PATH/recovery.fstab" 2>/dev/null || echo "No fstab found"
 
-          # 3. Kernel & Offsets
-          # Grab MagiskBoot for offsets
+          # 5. Kernel Offsets with MagiskBoot
           wget -q https://raw.githubusercontent.com/Drag0n-Y/magiskboot_binary/main/magiskboot
           chmod +x magiskboot
           ./magiskboot unpack "$TARGET_IMG"
@@ -84,21 +102,20 @@ jobs:
           if [ -f header ]; then
             PS=$(grep "pagesize" header | cut -d'=' -f2)
             BS=$(grep "base" header | cut -d'=' -f2)
+            # Use sed carefully or append if missing
             sed -i "/BOARD_BOOT_PAGESIZE/c\BOARD_BOOT_PAGESIZE := $PS" "$TREE_PATH/BoardConfig.mk"
-            echo "BOARD_KERNEL_BASE := $BS" >> "$TREE_PATH/BoardConfig.mk"
+            grep -q "BOARD_KERNEL_BASE" "$TREE_PATH/BoardConfig.mk" || echo "BOARD_KERNEL_BASE := $BS" >> "$TREE_PATH/BoardConfig.mk"
           fi
 
-          # 4. Copy Prebuilts
+          # 6. Prebuilts
           mkdir -p "$TREE_PATH/prebuilt"
-          for k in "kernel" "kernel.gz" "Image" "Image.gz"; do
-            if [ -f "$k" ]; then cp "$k" "$TREE_PATH/prebuilt/kernel"; break; fi
-          done
-          [ -f "dtb" ] && cp "dtb" "$TREE_PATH/prebuilt/dtb"
-          [ -f "dtbo.img" ] && cp "dtbo.img" "$TREE_PATH/prebuilt/dtbo.img"
+          find . -maxdepth 1 \( -name "kernel" -o -name "kernel.gz" -o -name "Image" -o -name "Image.gz" \) -exec cp {} "$TREE_PATH/prebuilt/kernel" \; -quit
+          find . -maxdepth 1 -name "dtb" -exec cp {} "$TREE_PATH/prebuilt/dtb" \;
+          find . -maxdepth 1 -name "dtbo.img" -exec cp {} "$TREE_PATH/prebuilt/dtbo.img" \;
 
+          # Finalize environment variables
           echo "TREE_PATH=$PWD/$TREE_PATH" >> $GITHUB_ENV
           echo "REPO_NAME=android_device_${BRAND}_${CODENAME}-twrp" >> $GITHUB_ENV
-
       - name: Push to GitHub
         run: |
           cd ${{ env.TREE_PATH }}
